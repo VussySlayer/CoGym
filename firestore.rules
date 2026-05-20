@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isValidUser(data) {
+      return data.uid is string &&
+             data.displayName is string &&
+             data.displayName.size() <= 100 &&
+             (!('email' in data) || data.email is string) &&
+             (!('role' in data) || data.role in ['admin', 'user']) &&
+             (!('code' in data) || data.code is string);
+    }
+
+    function isValidSession(data) {
+      return data.title is string &&
+             data.title.size() <= 100 &&
+             data.creatorId is string &&
+             data.location is string &&
+             data.location.size() <= 200 &&
+             data.participants is list &&
+             data.participants.size() <= 100 &&
+             data.startTime is timestamp &&
+             data.endTime is timestamp;
+    }
+
+    function isValidWeightEntry(data) {
+      return data.userId is string &&
+             data.value is number &&
+             data.date is timestamp &&
+             (!('note' in data) || (data.note is string && data.note.size() <= 500));
+    }
+
+    // Admins collection (read-only for security, managed via cloud console or specialized tool)
+    match /admins/{userId} {
+      allow read: if isSignedIn();
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isSignedIn() || (request.query.limit <= 1); // Allow querying by code
+      allow create: if (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
+      
+      match /templates/{templateId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+
+      match /weight_entries/{entryId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if (isOwner(userId) || isAdmin()) && isValidWeightEntry(request.resource.data);
+        allow update: if (isOwner(userId) || isAdmin()) && isValidWeightEntry(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // Sessions collection
+    match /sessions/{sessionId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidSession(request.resource.data) && request.resource.data.creatorId == request.auth.uid;
+      allow update: if isSignedIn() && (
+        (request.auth.uid == resource.data.creatorId && isValidSession(request.resource.data)) ||
+        isAdmin() ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participants', 'updatedAt', 'participantFocus']))
+      );
+      allow delete: if (isSignedIn() && resource.data.creatorId == request.auth.uid) || isAdmin();
+    }
+  }
+}

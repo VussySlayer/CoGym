@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "code": { "type": "string" }
+      },
+      "required": ["uid", "displayName"]
+    },
+    "WeightEntry": {
+      "title": "Weight Entry",
+      "description": "User weight record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "value": { "type": "number" },
+        "unit": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "note": { "type": "string" }
+      },
+      "required": ["userId", "value", "date"]
+    },
+    "WorkoutSession": {
+      "title": "Workout Session",
+      "description": "A scheduled workout session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "creatorPhoto": { "type": "string" },
+        "startTime": { "type": "string", "format": "date-time" },
+        "endTime": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "bodyPart": { "type": "string" },
+        "participants": { "type": "array", "items": { "type": "string" } },
+        "capacity": { "type": "number", "default": 6 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "color": { "type": "string" }
+      },
+      "required": ["creatorId", "startTime", "endTime", "location", "bodyPart", "title"]
+    },
+    "WorkoutTemplate": {
+      "title": "Workout Template",
+      "description": "A template for repeating sessions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "bodyPart": { "type": "string" },
+        "capacity": { "type": "number" },
+        "color": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "type": "object", "properties": { "userId": { "type": "string" } } },
+      "description": "Admin UIDs"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/sessions/{sessionId}": {
+      "schema": "WorkoutSession",
+      "description": "Workout sessions"
+    },
+    "/users/{userId}/templates/{templateId}": {
+      "schema": "WorkoutTemplate",
+      "description": "User workout templates"
+    },
+    "/users/{userId}/weight_entries/{entryId}": {
+      "schema": "WeightEntry",
+      "description": "User weight history"
+    }
+  }
+}

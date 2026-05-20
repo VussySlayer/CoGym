@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  
+  /* Dark Theme Palette */
+  --color-dark-bg: #111217;
+  --color-dark-surface: #1C1E26;
+  --color-dark-surface-lighter: #2A2D3A;
+  --color-dark-border: #2D303E;
+  --color-dark-text: #FFFFFF;
+  --color-dark-text-muted: #9CA3AF;
+  
+  /* Brand Colors */
+  --color-brand-primary: #3B82F6;
+  --color-workout-blue: #3B82F6;
+  --color-workout-green: #10B981;
+  --color-workout-red: #EF4444;
+  --color-workout-purple: #8B5CF6;
+  --color-workout-orange: #F59E0B;
+}
+
+@layer base {
+  body {
+    @apply bg-dark-bg text-dark-text font-sans antialiased;
+  }
+  
+  ::-webkit-scrollbar {
+    @apply w-1.5;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-border rounded-full hover:bg-dark-surface-lighter transition-colors;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-dark-surface border border-dark-border rounded-3xl p-6 shadow-xl;
+  }
+}

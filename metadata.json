@@ -1,0 +1,6 @@
+{
+  "name": "FlexSync",
+  "description": "A dark-themed workout collaboration platform with Google Sheets integration for tracking weight and bookings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

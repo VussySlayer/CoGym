@@ -6,7 +6,7 @@ import {defineConfig, loadEnv} from 'vite';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    base: '/CoGym/', // <-- This is required for GitHub Pages!
+    base: '/CoGym/', // <-- This is the new line required for GitHub Pages
     plugins: [react(), tailwindcss()],
     build: {
       target: 'esnext',

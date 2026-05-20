@@ -25,7 +25,9 @@ import {
   Apple,
   BookOpen,
   Share2,
-  RefreshCw
+  RefreshCw,
+  MessageSquare,
+  Activity
 } from 'lucide-react';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
@@ -66,6 +68,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, addDoc, updateDoc, doc, getDocs, onSnapshot, query, where, Timestamp, orderBy, arrayUnion, arrayRemove, getDoc, deleteField, setDoc, deleteDoc, limit } from 'firebase/firestore';
 import { nanoid } from 'nanoid';
+import PersonalRecordsView from './components/PersonalRecordsView';
 
 // --- TYPES ---
 export interface User {
@@ -77,7 +80,25 @@ export interface User {
   code?: string;
 }
 
-export interface WorkoutSession {
+export const DEFAULT_AVATARS = [
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Aneka",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Molly",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Sam",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Jack",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Lucy",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Oliver",
+  "https://api.dicebear.com/7.x/avataaars/svg?seed=Sophie"
+];
+
+const COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4'];
+const getColorForSession = (s: any) => {
+   if (s.color) return s.color;
+   const hash = String(s.title || s.id).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+   return COLORS[hash % COLORS.length];
+};
+
+interface WorkoutSession {
   id: string;
   title: string;
   description: string;
@@ -96,6 +117,17 @@ export interface WorkoutSession {
   color: string;
   createdAt?: any;
   updatedAt?: any;
+}
+
+export interface PersonalRecord {
+  id: string;
+  userId: string;
+  exercise: string;
+  weight: number;
+  unit: 'lbs' | 'kg';
+  date: string;
+  sessionId?: string;
+  muscleGroup: BodyPart;
 }
 
 export interface WorkoutTemplate {
@@ -270,8 +302,18 @@ const ANYTIME_FITNESS_LOCATIONS: Record<string, string[]> = {
 export default function App() {
   const { auth, db } = useFirebase();
   const [user, setUser] = useState<any>(null);
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const [activeAvatar, setActiveAvatar] = useState(() => {
+    return localStorage.getItem('my_avatar') || DEFAULT_AVATARS[0];
+  });
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [prs, setPrs] = useState<PersonalRecord[]>(() => {
+    try {
+      const stored = localStorage.getItem('flexsync_prs');
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
   const [sessions, setSessions] = useState<WorkoutSession[]>(() => {
     try {
       const storedV2 = localStorage.getItem('flexsync_sessions_v2');
@@ -315,7 +357,8 @@ export default function App() {
   });
   const [isSyncing, setIsSyncing] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeView, setActiveView] = useState<'Weight' | 'Calendar' | 'Settings' | 'Nutrition' | 'Research' | 'Accounts'>('Calendar');
+  const [activeView, setActiveView] = useState<'Weight' | 'Calendar' | 'Settings' | 'Nutrition' | 'Research' | 'Accounts' | 'Chat' | 'PRs'>('Calendar');
+  const [chatInitialMessage, setChatInitialMessage] = useState<string>('');
   const [calendarSubView, setCalendarSubView] = useState<'Month' | 'Week' | 'Day'>('Month');
   const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
   const [isManualLocation, setIsManualLocation] = useState(false);
@@ -608,6 +651,12 @@ export default function App() {
       setTemplates(docs);
     });
 
+    const qPrs = query(collection(db, `users/${fetchId}/prs`));
+    const unsubscribePrs = onSnapshot(qPrs, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PersonalRecord));
+      setPrs(docs);
+    });
+
     const qWeight = query(collection(db, `users/${fetchId}/weight_entries`), orderBy('date', 'desc'));
     const unsubscribeWeight = onSnapshot(qWeight, (snapshot) => {
         const docs = snapshot.docs.map(doc => {
@@ -645,6 +694,7 @@ export default function App() {
     return () => {
         unsubscribeSessions();
         unsubscribeTemp();
+        unsubscribePrs();
         unsubscribeWeight();
     };
   }, [user?.uid, db, useGoogleSheets, authReady]);
@@ -1054,20 +1104,19 @@ export default function App() {
 
   const grindStats = useMemo(() => {
     const effectiveUserId = user?.uid || 'guest_user';
-    const monthSessions = sessions.filter(s => 
-      isSameMonth(s.startTime, currentDate) && 
-      s.participants.includes(effectiveUserId)
-    );
+    const allUserSessions = sessions.filter(s => s.participants.includes(effectiveUserId));
+    
+    // Monthly sessions count
+    const monthSessions = allUserSessions.filter(s => isSameMonth(s.startTime, currentDate));
 
+    // Top Buddy
     const buddyCounts: Record<string, number> = {};
-    sessions.forEach(s => {
-      if (s.participants.includes(effectiveUserId)) {
-        s.participants.forEach(pId => {
-          if (pId !== effectiveUserId) {
-            buddyCounts[pId] = (buddyCounts[pId] || 0) + 1;
-          }
-        });
-      }
+    allUserSessions.forEach(s => {
+      s.participants.forEach(pId => {
+        if (pId !== effectiveUserId) {
+          buddyCounts[pId] = (buddyCounts[pId] || 0) + 1;
+        }
+      });
     });
 
     let topBuddyId = null;
@@ -1085,12 +1134,35 @@ export default function App() {
       topBuddyName = buddySession ? buddySession.creatorName : `Athlete ${topBuddyId.substring(0, 4)}`;
     }
 
+    // Days since last workout
+    const pastSessions = allUserSessions.filter(s => s.startTime < new Date()).sort((a,b) => b.startTime.getTime() - a.startTime.getTime());
+    const lastSession = pastSessions.length > 0 ? pastSessions[0] : null;
+    const daysSince = lastSession ? Math.floor((new Date().getTime() - lastSession.startTime.getTime()) / (1000 * 3600 * 24)) : null;
+
+    // This week upcoming workout
+    const thisWeekStart = new Date();
+    thisWeekStart.setHours(0,0,0,0);
+    const thisWeekEnd = new Date(thisWeekStart);
+    thisWeekEnd.setDate(thisWeekStart.getDate() + (7 - thisWeekStart.getDay()));
+    
+    const upcomingThisWeek = allUserSessions.filter(s => s.startTime > new Date() && s.startTime <= thisWeekEnd).sort((a,b) => a.startTime.getTime() - b.startTime.getTime());
+    const nextWorkout = upcomingThisWeek.length > 0 ? upcomingThisWeek[0] : null;
+
+    // Best PR
+    let bestPr = null;
+    if (prs.length > 0) {
+       bestPr = [...prs].sort((a,b) => b.weight - a.weight)[0];
+    }
+
     return {
       count: monthSessions.length,
       topBuddy: topBuddyName,
-      buddyId: topBuddyId
+      buddyId: topBuddyId,
+      daysSinceLast: daysSince,
+      nextWorkout: nextWorkout,
+      bestPr: bestPr
     };
-  }, [sessions, user, currentDate]);
+  }, [sessions, user, currentDate, prs]);
 
   const handleLogOut = async () => {
     await logOut();
@@ -1135,6 +1207,12 @@ export default function App() {
           <Apple size={20} />
         </button>
         <button 
+          onClick={() => setActiveView('Chat')}
+          className={`p-3 rounded-2xl transition-all ${activeView === 'Chat' ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-dark-text-muted'}`}
+        >
+          <MessageSquare size={20} />
+        </button>
+        <button 
           onClick={() => setActiveView('Research')}
           className={`p-3 rounded-2xl transition-all ${activeView === 'Research' ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20' : 'text-dark-text-muted'}`}
         >
@@ -1175,6 +1253,12 @@ export default function App() {
             label="Nutrition" 
             active={activeView === 'Nutrition'} 
             onClick={() => setActiveView('Nutrition')} 
+          />
+          <NavItem 
+            icon={<MessageSquare size={20} />} 
+            label="Chat" 
+            active={activeView === 'Chat'} 
+            onClick={() => setActiveView('Chat')} 
           />
           <NavItem 
             icon={<BookOpen size={20} />} 
@@ -1234,10 +1318,61 @@ export default function App() {
                        </div>
                     )}
                     <span className="text-xs font-black truncate">{grindStats.topBuddy}</span>
+                  </div>
+               </div>
+
+               <div className="bg-dark-surface-lighter p-4 rounded-[24px] border border-dark-border/50 shadow-inner">
+                  <div className="flex items-center gap-3 mb-2">
+                     <div className="w-8 h-8 rounded-full bg-green-500/10 flex items-center justify-center text-green-500">
+                        <Clock size={14} />
+                     </div>
+                     <span className="text-[9px] font-black uppercase tracking-widest text-dark-text-muted">Last Workout</span>
+                  </div>
+                  <div className="flex items-baseline gap-1">
+                     <span className="text-xl font-black">{grindStats.daysSinceLast !== null ? grindStats.daysSinceLast : '-'}</span>
+                     <span className="text-[10px] font-bold text-dark-text-muted uppercase ml-1">{grindStats.daysSinceLast === 1 ? 'day ago' : 'days ago'}</span>
+                  </div>
+               </div>
+
+               <div className="bg-dark-surface-lighter p-4 rounded-[24px] border border-dark-border/50 shadow-inner">
+                  <div className="flex items-center gap-3 mb-2">
+                     <div className="w-8 h-8 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500">
+                        <CalendarIcon size={14} />
+                     </div>
+                     <span className="text-[9px] font-black uppercase tracking-widest text-dark-text-muted">Up Next</span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                     {grindStats.nextWorkout ? (
+                        <>
+                           <span className="text-sm font-black truncate">{grindStats.nextWorkout.title}</span>
+                           <span className="text-[10px] font-bold text-dark-text-muted uppercase">{format(grindStats.nextWorkout.startTime, 'EEE, h:mm a')}</span>
+                        </>
+                     ) : (
+                        <span className="text-[10px] font-bold text-dark-text-muted uppercase italic">No sessions this week</span>
+                     )}
+                  </div>
+               </div>
+
+               <div className="bg-dark-surface-lighter p-4 rounded-[24px] border border-dark-border/50 shadow-inner cursor-pointer hover:border-brand-primary/50 transition-colors" onClick={() => setActiveView('PRs')}>
+                  <div className="flex items-center gap-3 mb-2">
+                     <div className="w-8 h-8 rounded-full bg-yellow-500/10 flex items-center justify-center text-yellow-500">
+                        <Activity size={14} />
+                     </div>
+                     <span className="text-[9px] font-black uppercase tracking-widest text-dark-text-muted">Best PR</span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                     {grindStats.bestPr ? (
+                        <>
+                           <span className="text-xl font-black">{grindStats.bestPr.weight} {grindStats.bestPr.unit}</span>
+                           <span className="text-[10px] font-bold text-brand-primary uppercase tracking-wider">{grindStats.bestPr.exercise}</span>
+                        </>
+                     ) : (
+                         <span className="text-[10px] font-bold text-dark-text-muted uppercase italic">Log a PR</span>
+                     )}
+                  </div>
                  </div>
               </div>
            </div>
-        </div>
 
         {/* Templates Section in Sidebar */}
         {user && templates.length > 0 && (
@@ -1262,10 +1397,32 @@ export default function App() {
         )}
 
         {/* User Card */}
-        <div className="mt-auto pt-6 border-t border-dark-border">
+        <div className="mt-auto pt-6 border-t border-dark-border relative">
+          {showAvatarPicker && user && (
+            <div className="absolute bottom-full left-0 mb-4 bg-dark-surface border border-dark-border rounded-2xl p-3 shadow-2xl flex flex-wrap gap-2 w-[240px] z-[60]">
+              {DEFAULT_AVATARS.map(avatar => (
+                <button
+                  key={avatar}
+                  onClick={() => {
+                    setActiveAvatar(avatar);
+                    localStorage.setItem('my_avatar', avatar);
+                    setShowAvatarPicker(false);
+                  }}
+                  className={`w-10 h-10 rounded-full border-2 transition-all hover:scale-110 ${activeAvatar === avatar ? 'border-brand-primary' : 'border-transparent'}`}
+                >
+                  <img src={avatar} className="w-full h-full rounded-full" />
+                </button>
+              ))}
+            </div>
+          )}
           {user ? (
             <div className={`flex flex-col lg:flex-row items-center gap-3 bg-dark-bg/40 p-2.5 rounded-2xl border border-dark-border/50`}>
-              <img src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`} className="w-8 h-8 lg:w-9 lg:h-9 rounded-full border-2 border-brand-primary/20" />
+              <div className="relative group cursor-pointer" onClick={() => setShowAvatarPicker(!showAvatarPicker)}>
+                <img src={activeAvatar} className="w-8 h-8 lg:w-9 lg:h-9 rounded-full border-2 border-brand-primary/20 transition-all group-hover:border-brand-primary" />
+                <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                   <span className="text-[8px] text-white font-black uppercase">Edit</span>
+                </div>
+              </div>
               <div className="hidden lg:flex flex-col flex-1 overflow-hidden">
                 <span className="text-xs font-black truncate">{user.displayName || user.email}</span>
                 <span className="text-[9px] text-brand-primary font-bold uppercase tracking-tighter">Athletic Rank: Pro</span>
@@ -1295,7 +1452,7 @@ export default function App() {
         <header className="h-20 lg:h-24 px-4 lg:px-12 flex items-center justify-between shrink-0 z-10 bg-dark-bg/80 backdrop-blur-xl">
           <div className="flex items-center gap-3 lg:gap-6 min-w-0">
             <h1 className="text-xl md:text-2xl lg:text-3xl font-black tracking-tighter uppercase whitespace-nowrap truncate">
-              {activeView === 'Weight' ? 'Weight Progress' : activeView === 'Settings' ? 'Account Settings' : activeView === 'Accounts' ? 'Account Management' : activeView === 'Nutrition' ? 'Nutrition Intel' : activeView === 'Research' ? 'Research Lab' : format(currentDate, 'MMMM yyyy')}
+              {activeView === 'Weight' ? 'Weight Progress' : activeView === 'Settings' ? 'Account Settings' : activeView === 'Accounts' ? 'Account Management' : activeView === 'Nutrition' ? 'Nutrition Intel' : activeView === 'Research' ? 'Research Lab' : activeView === 'Chat' ? 'Team Chat' : activeView === 'PRs' ? 'Personal Records' : format(currentDate, 'MMMM yyyy')}
             </h1>
             {activeView === 'Calendar' && (
               <div className="flex bg-dark-surface p-1 rounded-2xl border border-dark-border shadow-inner shrink-0">
@@ -1387,16 +1544,6 @@ export default function App() {
                           onSelectDay={(day: Date) => {
                             setSelectedDate(day);
                             setFocusedSessionId(null);
-                            const daySessions = sessions.filter((s: WorkoutSession) => isSameDay(s.startTime, day));
-                            if (daySessions.length === 0) {
-                              const now = new Date();
-                              const startTime = setHours(setMinutes(day, now.getMinutes()), now.getHours());
-                              setFormData(prev => ({
-                                ...prev,
-                                startTime: format(startTime, "yyyy-MM-dd'T'HH:mm")
-                              }));
-                              setIsModalOpen(true);
-                            }
                           }} 
                         />
                       </div>
@@ -1420,6 +1567,7 @@ export default function App() {
               )}
               {activeView === 'Weight' && <WeightTracker user={user} entries={weightEntries} sessions={sessions} gasUrl={gasUrl} onAddWeight={(entry) => setWeightEntries(prev => [entry, ...prev])} />}
               {activeView === 'Nutrition' && <NutritionView />}
+              {activeView === 'Chat' && <ChatView user={user} gasUrl={gasUrl} sessions={sessions} initialMessage={chatInitialMessage} onClearInitialMessage={() => setChatInitialMessage('')} />}
               {activeView === 'Research' && <ResearchView />}
               {activeView === 'Accounts' && (
                 <AccountsView 
@@ -1431,6 +1579,45 @@ export default function App() {
                 />
               )}
               {activeView === 'Settings' && <SettingsView user={user} onNavigate={setActiveView} />}
+              {activeView === 'PRs' && (
+                  <PersonalRecordsView 
+                     prs={prs} 
+                     sessions={sessions}
+                     onAddPr={async (prData: any) => {
+                        const effectiveUserId = user?.uid || 'guest_user';
+                        const newPr = { ...prData, userId: effectiveUserId };
+                        const isFirebaseDummy = !db || db.app.options.apiKey.includes('dummy');
+                        if (isFirebaseDummy) {
+                           const nextPr = { id: nanoid(), ...newPr };
+                           setPrs(prev => {
+                              const res = [nextPr, ...prev];
+                              localStorage.setItem('flexsync_prs', JSON.stringify(res));
+                              return res;
+                           });
+                        } else {
+                           await addDoc(collection(db, `users/${effectiveUserId}/prs`), newPr);
+                        }
+                     }}
+                     onDeletePr={async (prId: string) => {
+                        const effectiveUserId = user?.uid || 'guest_user';
+                        const isFirebaseDummy = !db || db.app.options.apiKey.includes('dummy');
+                        if (isFirebaseDummy) {
+                           setPrs(prev => {
+                              const res = prev.filter(p => p.id !== prId);
+                              localStorage.setItem('flexsync_prs', JSON.stringify(res));
+                              return res;
+                           });
+                        } else {
+                           await deleteDoc(doc(db, `users/${effectiveUserId}/prs/${prId}`));
+                        }
+                     }}
+                     onShare={(pr: any) => {
+                        const msg = `🎉 **NEW PR ALERT!** 🎉\nI just hit a new personal record on **${pr.exercise}**: ${pr.weight} ${pr.unit}!\n${pr.sessionId ? `(Achieved during a tracked session!)` : ''}`;
+                        setChatInitialMessage(msg);
+                        setActiveView('Chat');
+                     }}
+                  />
+              )}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -1723,9 +1910,11 @@ function SessionCard({ session, onJoin, onEdit, onDelete, onComment, user, isFoc
       animate={{ 
         opacity: 1, 
         scale: isFocused ? 1.02 : 1,
-        borderColor: isFocused ? 'var(--color-brand-primary)' : 'rgba(255,255,255,0.1)'
+        borderColor: isFocused ? 'var(--color-brand-primary)' : 'rgba(255,255,255,0.1)',
+        borderTopWidth: '4px',
+        borderTopColor: getColorForSession(session)
       }}
-      className={`group relative bg-[#1c1e26] border rounded-[32px] lg:rounded-[40px] p-6 lg:p-8 transition-all hover:bg-[#232630] overflow-hidden shadow-2xl ${
+      className={`group relative bg-[#1c1e26] border border-t-[4px] rounded-[32px] lg:rounded-[40px] p-6 lg:p-8 transition-all hover:bg-[#232630] overflow-hidden shadow-2xl ${
         isFocused ? 'ring-2 ring-brand-primary/50 border-brand-primary' : 'border-dark-border'
       }`}
     >
@@ -2029,7 +2218,7 @@ function MonthView({ sessions, currentDate, selectedDate, onSelectDay, onSelectS
             <div 
               key={idx}
               onClick={() => onSelectDay(day)}
-              className={`min-h-[100px] lg:min-h-[110px] p-1.5 lg:p-3 border-r border-b border-dark-border/50 transition-all hover:bg-brand-primary/5 cursor-pointer group flex flex-col gap-1 relative ${
+              className={`min-h-[60px] lg:min-h-[110px] p-1.5 lg:p-3 border-r border-b border-dark-border/50 transition-all hover:bg-brand-primary/5 cursor-pointer group flex flex-col gap-1 relative ${
                 !isCurrentMonth ? 'opacity-10 grayscale' : ''
               } ${idx % 7 === 6 ? 'border-r-0' : ''} ${isSelected ? 'bg-brand-primary/10 ring-1 ring-inset ring-brand-primary/30' : ''}`}
             >
@@ -2059,7 +2248,7 @@ function MonthView({ sessions, currentDate, selectedDate, onSelectDay, onSelectS
                 )}
               </div>
               
-              <div className="flex flex-col gap-1 mt-1 lg:mt-2 overflow-hidden z-10 w-full px-0.5 lg:px-1 mb-1">
+              <div className="hidden lg:flex flex-col gap-1 mt-1 lg:mt-2 overflow-hidden z-10 w-full px-0.5 lg:px-1 mb-1">
                 {daySessions.slice(0, 3).map((s: any) => (
                   <div 
                     key={s.id} 
@@ -2068,10 +2257,12 @@ function MonthView({ sessions, currentDate, selectedDate, onSelectDay, onSelectS
                        onSelectSession(s.id);
                     }}
                     style={{
-                       backgroundColor: focusedSessionId === s.id ? s.color : `${s.color || '#3B82F6'}15`,
-                       borderColor: focusedSessionId === s.id ? 'rgba(255,255,255,0.4)' : `${s.color || '#3B82F6'}30`,
-                       borderLeftWidth: '3px',
-                       borderLeftColor: s.color || '#3B82F6',
+                       backgroundColor: focusedSessionId === s.id ? getColorForSession(s) : `${getColorForSession(s) || '#3B82F6'}15`,
+                       borderTopColor: getColorForSession(s),
+                       borderRightColor: focusedSessionId === s.id ? 'rgba(255,255,255,0.4)' : `${getColorForSession(s) || '#3B82F6'}30`,
+                       borderBottomColor: focusedSessionId === s.id ? 'rgba(255,255,255,0.4)' : `${getColorForSession(s) || '#3B82F6'}30`,
+                       borderLeftColor: focusedSessionId === s.id ? 'rgba(255,255,255,0.4)' : `${getColorForSession(s) || '#3B82F6'}30`,
+                       borderTopWidth: '3px',
                        color: focusedSessionId === s.id ? '#000' : 'inherit'
                     }}
                     className={`flex flex-col gap-1 p-1.5 px-2 text-left rounded-md border transition-all overflow-hidden cursor-pointer hover:brightness-125`}
@@ -2215,6 +2406,351 @@ function DailyView({ sessions, onJoin, onEdit, onDelete, onComment, user, select
              <span className="text-lg font-black uppercase tracking-widest">Dead silent on the gym floor</span>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ChatView({ user, gasUrl, sessions, initialMessage, onClearInitialMessage }: { user: any, gasUrl: string, sessions: any[], initialMessage?: string, onClearInitialMessage?: () => void }) {
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [activeRoomId, setActiveRoomId] = useState<string>("general");
+  const [newMessage, setNewMessage] = useState(initialMessage || "");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [newRoomName, setNewRoomName] = useState("");
+  const [newRoomParticipants, setNewRoomParticipants] = useState<string[]>([]);
+  const messagesEndRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialMessage) {
+       setNewMessage(prev => prev ? prev + '\n\n' + initialMessage : initialMessage);
+       if (onClearInitialMessage) onClearInitialMessage();
+    }
+  }, [initialMessage, onClearInitialMessage]);
+
+  const fetchChatData = useCallback(async () => {
+    if (!gasUrl) return;
+    try {
+      const resp = await fetch(gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'getChat' })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setRooms(data.rooms || []);
+        setMessages(data.messages || data.data || []);
+        
+        let loadedUsers = data.users || [];
+        
+        if (loadedUsers.length === 0) {
+          try {
+            const saved = localStorage.getItem('flexsync_local_users');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed.length > 0) {
+                loadedUsers = parsed.map((u: any) => ({ name: u.displayName || u.name }));
+              }
+            }
+          } catch(err) {}
+        }
+        
+        if (loadedUsers.length > 0) {
+          setAllUsers(loadedUsers);
+        }
+      }
+    } catch(e) {
+      console.warn("GAS fetch getChat error", e);
+    }
+  }, [gasUrl]);
+
+  useEffect(() => {
+    fetchChatData();
+    const interval = setInterval(fetchChatData, 15000);
+    return () => clearInterval(interval);
+  }, [fetchChatData]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, activeRoomId]);
+
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
+
+  const activeMessages = messages.filter(m => (m.roomId || "general") === activeRoomId);
+
+  const renderMessageText = (text: string) => {
+    const sessionMatch = text.match(/\[Join Session\]\((.*?)\)/);
+    if (sessionMatch) {
+      const parts = text.split(sessionMatch[0]);
+      return (
+        <div>
+          <div className="whitespace-pre-wrap">{parts[0]}</div>
+          <a href={sessionMatch[1]} className="inline-block mt-2 bg-brand-primary text-white font-black uppercase tracking-widest text-[10px] px-4 py-2 rounded-xl shadow-lg border border-white/20 hover:scale-105 transition-transform">
+            🚀 JOIN SESSION
+          </a>
+          <div className="whitespace-pre-wrap mt-2">{parts[1]}</div>
+        </div>
+      );
+    }
+    return <div className="whitespace-pre-wrap">{text}</div>;
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !gasUrl) return;
+    
+    setIsLoading(true);
+    const text = newMessage.trim();
+    setNewMessage("");
+
+    const userId = user?.uid || 'guest_user';
+    const userName = user?.name || user?.displayName || user?.email?.split('@')[0] || 'Athlete';
+
+    const optimisticMsg = {
+      id: 'gas_temp_c_' + Date.now(),
+      roomId: activeRoomId,
+      userId,
+      userName,
+      text,
+      timestamp: new Date().toISOString()
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
+
+    try {
+      await fetch(gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'logChat', data: optimisticMsg })
+      });
+      fetchChatData();
+    } catch (e) {
+      console.warn("GAS logChat error", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCreateRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gasUrl || !newRoomName.trim()) return;
+    
+    setIsLoading(true);
+    const id = 'gas_room_' + Date.now();
+    const myName = user?.name || user?.displayName || user?.email?.split('@')[0] || 'Athlete';
+    let participants = [...newRoomParticipants];
+    if (!participants.includes(myName)) participants.push(myName);
+    
+    const optimisticRoom = {
+      id,
+      name: newRoomName.trim(),
+      participants,
+      createdAt: new Date().toISOString()
+    };
+
+    setRooms(prev => [...prev, optimisticRoom]);
+    setActiveRoomId(id);
+    setNewRoomName("");
+    setNewRoomParticipants([]);
+    setIsCreatingRoom(false);
+
+    try {
+      await fetch(gasUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'createChatRoom', data: optimisticRoom })
+      });
+      fetchChatData();
+    } catch (e) {
+      console.warn("GAS createChat error", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const myName = String(user?.name || user?.displayName || user?.email?.split('@')[0] || '').toLowerCase().replace(/\s+/g,'');
+  
+  const visibleRooms = [...rooms].filter(r => {
+    if (!r.participants || r.participants.length === 0) return true;
+    return r.participants.some((p: string) => String(p).toLowerCase().replace(/\s+/g,'').includes(myName));
+  });
+
+  if (!visibleRooms.find(r => r.id === 'general')) {
+     visibleRooms.unshift({ id: 'general', name: 'General', participants: [] });
+  }
+
+  const activeRoom = visibleRooms.find(r => r.id === activeRoomId) || visibleRooms[0];
+
+  const handleShareSession = () => {
+    // Find active or next session
+    const now = new Date();
+    const futureSessions = [...(sessions || [])].filter(s => new Date(s.endTime) > now)
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+    
+    if (futureSessions.length > 0) {
+      const next = futureSessions[0];
+      const link = `${window.location.origin}${window.location.pathname}?session=${next.id}`;
+      const msg = `🚀 Sharing Session: ${next.title} - ${format(new Date(next.startTime), 'MMM d, h:mm a')}\nLocation: ${next.location}`;
+      setNewMessage(newMessage ? newMessage + " " + msg : msg);
+    } else {
+      alert("No active or upcoming sessions to share.");
+    }
+  };
+
+  return (
+    <div className="flex h-[calc(100vh-140px)] max-w-6xl mx-auto bg-dark-surface border border-dark-border rounded-[32px] overflow-hidden shadow-2xl relative">
+      <div className="absolute top-0 left-0 w-full h-[6px] bg-brand-primary z-20"></div>
+      
+      {/* Sidebar */}
+      <div className="w-1/3 max-w-[320px] min-w-[240px] border-r border-dark-border/50 bg-dark-bg/40 flex flex-col pt-2">
+        <div className="p-6 border-b border-dark-border/50 shrink-0 flex justify-between items-center">
+          <h2 className="text-xl font-black uppercase tracking-widest flex items-center gap-3">
+            <MessageSquare className="text-brand-primary" /> Chats
+          </h2>
+          <button onClick={() => setIsCreatingRoom(!isCreatingRoom)} className="p-2 bg-dark-surface-light rounded-xl hover:bg-dark-surface-lighter text-dark-text transition-colors">
+            +
+          </button>
+        </div>
+
+        {isCreatingRoom && (
+          <form onSubmit={handleCreateRoom} className="p-4 bg-dark-surface-lighter border-b border-dark-border/50 space-y-3">
+            <input 
+              type="text" 
+              placeholder="Room Name" 
+              value={newRoomName} 
+              onChange={e => setNewRoomName(e.target.value)} 
+              className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs text-white" 
+            />
+            <div className="max-h-[150px] overflow-y-auto space-y-1 bg-dark-bg p-2 rounded-lg border border-dark-border custom-scrollbar">
+              <div className="text-[10px] uppercase text-dark-text-muted mb-2 font-black tracking-widest pl-1">Select Participants</div>
+              {allUsers.filter(u => String(u.name).toLowerCase().replace(/\s+/g,'') !== myName).map(u => (
+                <label key={u.code || u.name} className="flex items-center gap-2 cursor-pointer p-1 hover:bg-dark-surface rounded">
+                  <input 
+                    type="checkbox"
+                    checked={newRoomParticipants.includes(u.name)}
+                    onChange={(e) => {
+                      if (e.target.checked) setNewRoomParticipants([...newRoomParticipants, u.name]);
+                      else setNewRoomParticipants(newRoomParticipants.filter(p => p !== u.name));
+                    }}
+                    className="rounded border-dark-border bg-dark-surface text-brand-primary focus:ring-brand-primary"
+                  />
+                  <span className="text-xs text-white uppercase">{u.name}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setIsCreatingRoom(false)} className="text-xs text-dark-text-muted hover:text-white">Cancel</button>
+              <button type="submit" disabled={isLoading || !newRoomName.trim()} className="px-3 py-1.5 bg-brand-primary text-white text-xs font-bold rounded-lg disabled:opacity-50">Create</button>
+            </div>
+          </form>
+        )}
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
+          {visibleRooms.map(room => (
+            <button
+              key={room.id}
+              onClick={() => setActiveRoomId(room.id)}
+              className={`w-full text-left p-4 rounded-2xl transition-all ${activeRoomId === room.id ? 'bg-brand-primary/10 border border-brand-primary/30 ring-1 ring-brand-primary' : 'hover:bg-dark-surface border border-transparent'}`}
+            >
+              <div className="font-bold text-sm text-white overflow-hidden text-ellipsis whitespace-nowrap">{room.name}</div>
+              <div className="text-[10px] text-dark-text-muted mt-1 uppercase tracking-wider overflow-hidden text-ellipsis whitespace-nowrap">
+                {room.participants?.length > 0 ? room.participants.join(', ') : 'Public'}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col bg-dark-surface relative">
+        <div className="p-6 border-b border-dark-border/50 shrink-0 bg-dark-surface-light flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-black text-white">{activeRoom?.name}</h3>
+            <p className="text-[10px] text-dark-text-muted uppercase tracking-widest">{activeRoom?.participants?.length > 0 ? 'Private Room' : 'Public Channel'}</p>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+          {activeMessages.map((msg) => {
+            const isMe = msg.userId === (user?.uid || 'guest_user');
+            return (
+              <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                <div className={`flex items-center gap-2 mb-1 ${isMe ? 'flex-row-reverse' : ''}`}>
+                  <span className="text-[10px] font-black uppercase text-dark-text-muted">{msg.userName}</span>
+                  <span className="text-[8px] text-dark-text-muted/60">{format(new Date(msg.timestamp), 'h:mm a')}</span>
+                </div>
+                <div className={`max-w-[80%] p-4 rounded-2xl text-sm ${isMe ? 'bg-brand-primary text-white rounded-tr-sm' : 'bg-dark-surface-lighter text-dark-text rounded-tl-sm border border-dark-border/50'}`}>
+                  {renderMessageText(msg.text)}
+                </div>
+              </div>
+            );
+          })}
+          {activeMessages.length === 0 && (
+            <div className="h-full flex items-center justify-center text-dark-text-muted text-sm italic">
+              No messages yet. Start the conversation!
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <div className="p-4 bg-dark-surface-lighter shrink-0 relative">
+          {showSessionPicker && (
+            <div className="absolute bottom-full left-0 mb-4 w-72 bg-dark-surface border border-dark-border rounded-2xl p-2 shadow-2xl z-50">
+              <div className="text-[10px] font-black uppercase text-dark-text-muted mb-2 px-2">Select Session to Share</div>
+              <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                {[...(sessions || [])]
+                  .filter(s => new Date(s.endTime) > new Date())
+                  .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+                  .map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        const link = `${window.location.origin}${window.location.pathname}?session=${s.id}`;
+                        const msg = `Sharing session: ${s.title} - ${format(new Date(s.startTime), 'MMM d, h:mm a')}\n[Join Session](${link})`;
+                        setNewMessage(newMessage ? newMessage + "\n\n" + msg : msg);
+                        setShowSessionPicker(false);
+                      }}
+                      className="w-full text-left p-3 hover:bg-dark-bg rounded-xl mb-1 flex flex-col transition-colors border border-transparent hover:border-dark-border"
+                    >
+                      <span className="text-white text-xs font-bold truncate">{s.title}</span>
+                      <span className="text-brand-primary text-[10px] uppercase font-black tracking-widest">{format(new Date(s.startTime), 'MMM d, h:mm a')}</span>
+                    </button>
+                  ))}
+                  {sessions?.length === 0 && (
+                    <div className="p-3 text-xs text-dark-text-muted italic">No upcoming sessions</div>
+                  )}
+              </div>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              onKeyDown={(e) => { if(e.key === 'Enter') handleSend(e as any) }}
+              placeholder={`Message ${activeRoom?.name}...`}
+              className="flex-1 bg-dark-bg border border-dark-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-primary/50 text-white placeholder-dark-text-muted"
+            />
+            <button 
+              type="button" 
+              onClick={() => setShowSessionPicker(!showSessionPicker)}
+              title="Share active/next session"
+              className="px-4 bg-dark-bg border border-dark-border text-brand-primary rounded-xl hover:bg-dark-surface transition-colors flex items-center justify-center p-3"
+            >
+              <Share2 size={16} />
+            </button>
+            <button 
+              type="button" 
+              onClick={handleSend}
+              disabled={isLoading || !newMessage.trim()}
+              className="px-6 bg-brand-primary text-white font-black text-xs uppercase tracking-widest rounded-xl hover:bg-brand-primary-light disabled:opacity-50 transition-colors"
+            >
+              Send
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2945,13 +3481,6 @@ function LoginScreen({ onCodeLogin, gasUrl, useGoogleSheets }: { onCodeLogin: (u
         </form>
 
         <div className="mt-10 pt-10 border-t border-dark-border/50">
-          <button 
-            onClick={() => signInWithGoogle()}
-            className="w-full bg-dark-bg border border-dark-border hover:bg-dark-surface-lighter text-dark-text font-black py-4 rounded-2xl transition-all uppercase tracking-widest text-[9px] flex items-center justify-center gap-3"
-          >
-            <Lock size={12} className="text-brand-primary" />
-            Root Admin Override
-          </button>
         </div>
       </motion.div>
     </div>
@@ -2994,7 +3523,7 @@ function AccountsView({ gasUrl, setGasUrl, useGoogleSheets, setUseGoogleSheets, 
 
   useEffect(() => {
     // 1. Fetch from GAS if active
-    if (gasUrl && (useGoogleSheets || !db || db.app.options.apiKey.includes('dummy'))) {
+    if (gasUrl) {
       fetch(gasUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -3008,7 +3537,7 @@ function AccountsView({ gasUrl, setGasUrl, useGoogleSheets, setUseGoogleSheets, 
     }
 
     // 2. Fetch from Firebase
-    if (db && db.app.options.apiKey !== 'dummy-key' && !useGoogleSheets) {
+    if (db && db.app.options.apiKey !== 'dummy-key') {
       const q = query(collection(db, 'users'), orderBy('displayName', 'asc'));
       const unsub = onSnapshot(q, {
         next: (snap) => {
@@ -3031,10 +3560,10 @@ function AccountsView({ gasUrl, setGasUrl, useGoogleSheets, setUseGoogleSheets, 
     // Merge real users, gas users, and local users, avoiding duplicates by code
     const combined = [...users];
     
-    gasUsers.forEach(gu => {
+    gasUsers.forEach((gu, idx) => {
       if (!combined.some(u => u.code === gu.code)) {
         combined.push({
-          id: `gas_${gu.name}`,
+          id: `gas_${gu.code || gu.name}_${idx}`,
           displayName: gu.name,
           role: gu.role,
           code: gu.code,
@@ -3088,8 +3617,7 @@ function AccountsView({ gasUrl, setGasUrl, useGoogleSheets, setUseGoogleSheets, 
             });
             const gd = await gRes.json();
             if (gd.success) setGasUsers(gd.data);
-            setSubmitting(false);
-            return;
+            // DON'T return, fall through to save to Firebase/LocalStorage as well
           }
         } catch (gasErr) {
           console.warn("GAS Registry Save failed", gasErr);

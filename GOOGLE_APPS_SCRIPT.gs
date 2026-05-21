@@ -40,8 +40,18 @@ function doPost(e) {
       result = getWeights(ss, data);
     } else if (action === "logWeight") {
       result = logWeight(ss, data);
+    } else if (action === "getChat") {
+      result = getChats(ss, data);
+    } else if (action === "createChatRoom") {
+      result = createChatRoom(ss, data);
+    } else if (action === "logChat") {
+      result = logChatMessage(ss, data);
     } else if (action === "validate") {
       result = validateUser(ss, data);
+    } else if (action === "getUsers") {
+      result = getUsers(ss, data);
+    } else if (action === "createUser") {
+      result = createUser(ss, data);
     } else if (action === "ping") {
       result = { success: true, message: "pong" };
     }
@@ -60,17 +70,17 @@ function validateUser(ss, data) {
   const code = String(data.code || "").toUpperCase().trim();
   if (!code) return { success: false, error: "Code required" };
   
+  // Always allow the admin override
+  if (code === "011426") {
+    return { success: true, user: { name: "Root Admin", role: "admin", code: "011426" } };
+  }
+
   const expectedHeaders = ["code", "name", "role", "email"];
   let sheet = ss.getSheetByName("Users") || ss.insertSheet("Users");
   const indices = getHeaderIndices(sheet, expectedHeaders);
   
   const fullData = sheet.getDataRange().getValues();
   
-  // Always allow the admin override
-  if (code === "011426") {
-    return { success: true, user: { name: "Root Admin", role: "admin", code: "011426" } };
-  }
-
   if (fullData.length <= 1) {
     return { success: false, error: "User database is empty. Please add users to the 'Users' sheet." };
   }
@@ -91,6 +101,46 @@ function validateUser(ss, data) {
   }
   
   return { success: false, error: "Invalid code. Check the 'Users' sheet for correct codes." };
+}
+
+function getUsers(ss, data) {
+  let sheet = ss.getSheetByName("Users") || ss.insertSheet("Users");
+  const indices = getHeaderIndices(sheet, ["code", "name", "role", "email"]);
+  
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { success: true, data: [] };
+  
+  const rows = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  const users = rows.map(row => ({
+    code: row[indices["code"]] || "",
+    name: row[indices["name"]] || "",
+    role: row[indices["role"]] || "user",
+    email: row[indices["email"]] || ""
+  })).filter(u => u.name);
+  
+  return { success: true, data: users };
+}
+
+function createUser(ss, data) {
+  let sheet = ss.getSheetByName("Users") || ss.insertSheet("Users");
+  const indices = getHeaderIndices(sheet, ["code", "name", "role", "email"]);
+  
+  // Generate random 6 character alphanumeric code
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  
+  const rowData = new Array(sheet.getLastColumn()).fill("");
+  rowData[indices["code"]] = code;
+  rowData[indices["name"]] = data.name;
+  rowData[indices["role"]] = data.role || 'user';
+  rowData[indices["email"]] = data.email || '';
+  
+  sheet.appendRow(rowData);
+  
+  return { success: true, code: code, user: { code, name: data.name, role: data.role || 'user', email: data.email || '' } };
 }
 
 function getHeaderIndices(sheet, expectedHeaders) {
@@ -226,4 +276,93 @@ function logWeight(ss, data) {
   
   sheet.appendRow(rowData);
   return { success: true, id: id };
+}
+
+function getChats(ss, data) {
+  const roomHeaders = ["id", "name", "participants", "createdAt"];
+  let roomSheet = ss.getSheetByName("ChatRooms");
+  if (!roomSheet) { roomSheet = ss.insertSheet("ChatRooms"); getHeaderIndices(roomSheet, roomHeaders); }
+  const roomIndices = getHeaderIndices(roomSheet, roomHeaders);
+  
+  let rooms = [];
+  if (roomSheet.getLastRow() > 1) {
+    const rRows = roomSheet.getRange(2, 1, roomSheet.getLastRow() - 1, roomSheet.getLastColumn()).getValues();
+    rooms = rRows.map(row => ({
+      id: row[roomIndices["id"]],
+      name: row[roomIndices["name"]],
+      participants: String(row[roomIndices["participants"]] || "").split(",").filter(Boolean),
+      createdAt: row[roomIndices["createdAt"]] instanceof Date ? row[roomIndices["createdAt"]].toISOString() : row[roomIndices["createdAt"]]
+    }));
+  }
+
+  const msgHeaders = ["id", "roomId", "userId", "userName", "text", "timestamp"];
+  let msgSheet = ss.getSheetByName("ChatMessages");
+  if (!msgSheet) { msgSheet = ss.insertSheet("ChatMessages"); getHeaderIndices(msgSheet, msgHeaders); }
+  const msgIndices = getHeaderIndices(msgSheet, msgHeaders);
+  
+  let messages = [];
+  if (msgSheet.getLastRow() > 1) {
+    const lastRow = msgSheet.getLastRow();
+    const limit = 200;
+    const startRow = Math.max(2, lastRow - limit + 1);
+    const numRows = lastRow - startRow + 1;
+    
+    if (numRows > 0) {
+      const mRows = msgSheet.getRange(startRow, 1, numRows, msgSheet.getLastColumn()).getValues();
+      messages = mRows.map(row => ({
+        id: row[msgIndices["id"]],
+        roomId: row[msgIndices["roomId"]],
+        userId: row[msgIndices["userId"]],
+        userName: row[msgIndices["userName"]],
+        text: row[msgIndices["text"]],
+        timestamp: row[msgIndices["timestamp"]] instanceof Date ? row[msgIndices["timestamp"]].toISOString() : row[msgIndices["timestamp"]]
+      }));
+    }
+  }
+
+  // Also get users to reduce calls
+  let usersSheet = ss.getSheetByName("Users");
+  let users = [];
+  if (usersSheet && usersSheet.getLastRow() > 1) {
+    const uIndices = getHeaderIndices(usersSheet, ["code", "name", "role", "email"]);
+    const uRows = usersSheet.getRange(2, 1, usersSheet.getLastRow() - 1, usersSheet.getLastColumn()).getValues();
+    users = uRows.map(row => ({
+      name: row[uIndices["name"]],
+    })).filter(u => u.name);
+  }
+
+  return { success: true, rooms, messages, users };
+}
+
+function createChatRoom(ss, data) {
+  let sheet = ss.getSheetByName("ChatRooms") || ss.insertSheet("ChatRooms");
+  const indices = getHeaderIndices(sheet, ["id", "name", "participants", "createdAt"]);
+  
+  const id = String(data.id || "gas_room_" + Date.now());
+  const rowData = new Array(sheet.getLastColumn()).fill("");
+  rowData[indices["id"]] = id;
+  rowData[indices["name"]] = data.name || "New Chat";
+  rowData[indices["participants"]] = (data.participants || []).join(",");
+  rowData[indices["createdAt"]] = new Date();
+  
+  sheet.appendRow(rowData);
+  return { success: true, room: { id, name: data.name, participants: data.participants, createdAt: new Date().toISOString() } };
+}
+
+function logChatMessage(ss, data) {
+  let sheet = ss.getSheetByName("ChatMessages") || ss.insertSheet("ChatMessages");
+  const indices = getHeaderIndices(sheet, ["id", "roomId", "userId", "userName", "text", "timestamp"]);
+  
+  const id = String(data.id || "gas_msg_" + Date.now());
+  const rowData = new Array(sheet.getLastColumn()).fill("");
+  
+  rowData[indices["id"]] = id;
+  rowData[indices["roomId"]] = data.roomId || "general";
+  rowData[indices["userId"]] = data.userId;
+  rowData[indices["userName"]] = data.userName;
+  rowData[indices["text"]] = data.text;
+  rowData[indices["timestamp"]] = new Date(data.timestamp || new Date());
+  
+  sheet.appendRow(rowData);
+  return { success: true, message: { id, roomId: data.roomId || "general", userId: data.userId, userName: data.userName, text: data.text, timestamp: new Date(data.timestamp || new Date()).toISOString() } };
 }

@@ -6,7 +6,7 @@ import {defineConfig, loadEnv} from 'vite';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    base: './', // Use relative paths for assets so it works on any GitHub Pages subpath
+    base: './CoGym/', // Use relative paths for assets so it works on any GitHub Pages subpath
     plugins: [react(), tailwindcss()],
     build: {
       target: 'esnext',

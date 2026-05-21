@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { format } from 'date-fns';
 import { Activity, Plus, Tag, Share2, Trash2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 
 export default function PersonalRecordsView({ prs, sessions, onAddPr, onDeletePr, onShare }: any) {
   const [isAdding, setIsAdding] = useState(false);

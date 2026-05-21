@@ -222,11 +222,38 @@ export function useFirebase() {
 
 async function loadConfig() {
   try {
-    // @ts-ignore
-    const config = await import('../firebase-applet-config.json').catch(() => null);
+    let config: any = null;
+
+    // 1. Try loading from Vite's import.meta.env
+    const metaEnv = (import.meta as any).env;
+    if (metaEnv && metaEnv.VITE_FIREBASE_API_KEY) {
+      config = {
+        apiKey: metaEnv.VITE_FIREBASE_API_KEY,
+        authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN,
+        projectId: metaEnv.VITE_FIREBASE_PROJECT_ID,
+        storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET,
+        messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID,
+        appId: metaEnv.VITE_FIREBASE_APP_ID
+      };
+    }
+
+    // 2. Try loading from firebase-applet-config.json dynamically
+    if (!config) {
+      // Use /* @vite-ignore */ to prevent Vite from raising a fatal build-time error if the file is missing in GitHub Actions
+      const configModule = await import(/* @vite-ignore */ '../firebase-applet-config.json').catch(() => null);
+      config = configModule ? (configModule.default || configModule) : null;
+    }
+
+    // 3. Try fetching it as a runtime static asset
+    if (!config) {
+      const resp = await fetch('./firebase-applet-config.json').catch(() => null);
+      if (resp && resp.ok) {
+        config = await resp.json().catch(() => null);
+      }
+    }
+
     if (config && config.apiKey && !config.apiKey.includes('dummy')) {
-      const realConfig = config.default || config;
-      const result = initializeFirebase(realConfig, "app-real");
+      const result = initializeFirebase(config, "app-real");
       if (result) {
         firebaseInstance = result;
         // Update global exports
